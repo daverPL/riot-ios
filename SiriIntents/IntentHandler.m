@@ -18,6 +18,10 @@
 
 #import <MatrixKit/MatrixKit.h>
 
+#if __has_include(<MatrixSDK/MXJingleCallStack.h>)
+#define CALL_STACK_JINGLE
+#endif
+
 @interface IntentHandler () <INStartAudioCallIntentHandling, INStartVideoCallIntentHandling, INSendMessageIntentHandling>
 
 @end
@@ -60,7 +64,7 @@
     MXKAccount *account = [MXKAccountManager sharedManager].activeAccounts.firstObject;
     if (account)
     {
-#if defined MX_CALL_STACK_OPENWEBRTC || defined MX_CALL_STACK_ENDPOINT || defined MX_CALL_STACK_JINGLE
+#if defined MX_CALL_STACK_OPENWEBRTC || defined MX_CALL_STACK_ENDPOINT || defined CALL_STACK_JINGLE
         NSUserActivity *userActivity = [[NSUserActivity alloc] initWithActivityType:NSStringFromClass([INStartAudioCallIntent class])];
         response = [[INStartAudioCallIntentResponse alloc] initWithCode:INStartAudioCallIntentResponseCodeReady userActivity:userActivity];
 #else
@@ -111,7 +115,7 @@
     MXKAccount *account = [MXKAccountManager sharedManager].activeAccounts.firstObject;
     if (account)
     {
-#if defined MX_CALL_STACK_OPENWEBRTC || defined MX_CALL_STACK_ENDPOINT || defined MX_CALL_STACK_JINGLE
+#if defined MX_CALL_STACK_OPENWEBRTC || defined MX_CALL_STACK_ENDPOINT || defined CALL_STACK_JINGLE
         NSUserActivity *userActivity = [[NSUserActivity alloc] initWithActivityType:NSStringFromClass([INStartVideoCallIntent class])];
         response = [[INStartVideoCallIntentResponse alloc] initWithCode:INStartVideoCallIntentResponseCodeReady userActivity:userActivity];
 #else
@@ -214,30 +218,25 @@
             
                                     if (isEncrypted)
                                     {
-                                        // Fetch MXRoomAccountData and list of MXEvent for corresponding room to create MXRoom instance
-                                        // since it's neccesary to send text message through it rather than directly
-                                        // through MXRestClient due to encryption
-                                        [fileStore asyncAccountDataOfRoom:roomID success:^(MXRoomAccountData * _Nonnull roomAccountData) {
-                                            [fileStore asyncStateEventsOfRoom:roomID success:^(NSArray<MXEvent *> * _Nonnull stateEvents) {
+                                        [MXFileStore setPreloadOptions:0];
                                                 
-                                                MXSession *session = [[MXSession alloc] initWithMatrixRestClient:account.mxRestClient];
-                                                [session setStore:[[MXNoStore alloc] init] success:^{
-                                                    MXRoom *room = [[MXRoom alloc] initWithRoomId:roomID
-                                                                                 andMatrixSession:session
-                                                                                   andStateEvents:stateEvents
-                                                                                   andAccountData:roomAccountData];
-                                                    [room sendTextMessage:intent.content
-                                                                  success:^(NSString *eventId) {
-                                                                      completeWithCode(INSendMessageIntentResponseCodeSuccess);
-                                                                  } failure:^(NSError *error) {
-                                                                      completeWithCode(INSendMessageIntentResponseCodeFailure);
-                                                                  }];
-                                                    
-                                                } failure:^(NSError *error) {
-                                                    completeWithCode(INSendMessageIntentResponseCodeFailure);
-                                                }];
-                                            } failure:nil];
-                                        } failure:nil];
+                                        MXSession *session = [[MXSession alloc] initWithMatrixRestClient:account.mxRestClient];
+                                        MXWeakify(session);
+                                        [session setStore:fileStore success:^{
+                                            MXStrongifyAndReturnIfNil(session);
+                                            
+                                            MXRoom *room = [MXRoom loadRoomFromStore:fileStore withRoomId:roomID matrixSession:session];
+
+                                            [room sendTextMessage:intent.content
+                                                          success:^(NSString *eventId) {
+                                                              completeWithCode(INSendMessageIntentResponseCodeSuccess);
+                                                          } failure:^(NSError *error) {
+                                                              completeWithCode(INSendMessageIntentResponseCodeFailure);
+                                                          }];
+
+                                        } failure:^(NSError *error) {
+                                            completeWithCode(INSendMessageIntentResponseCodeFailure);
+                                        }];
 
                                         return;
                                     }
